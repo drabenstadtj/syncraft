@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,10 @@ import (
 
 type Server struct {
 	dataDir string
+}
+
+type manifest struct {
+	Count int `json:"count"`
 }
 
 func New(dataDir string) *Server {
@@ -31,12 +36,14 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := filepath.Join(s.dataDir, name+".syncdiff")
-	f, err := os.Open(path)
-	if os.IsNotExist(err) {
+	m, err := s.loadManifest(name)
+	if err != nil || m.Count == 0 {
 		http.Error(w, "no diff for world", http.StatusNotFound)
 		return
 	}
+
+	path := s.diffPath(name, m.Count)
+	f, err := os.Open(path)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -54,13 +61,20 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := os.MkdirAll(s.dataDir, 0755); err != nil {
+	worldDir := filepath.Join(s.dataDir, name)
+	if err := os.MkdirAll(worldDir, 0755); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	path := filepath.Join(s.dataDir, name+".syncdiff")
-	f, err := os.Create(path)
+	m, err := s.loadManifest(name)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	next := m.Count + 1
+	f, err := os.Create(s.diffPath(name, next))
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -71,11 +85,45 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "write failed", http.StatusInternalServerError)
 		return
 	}
+	f.Close()
 
-	fmt.Fprintf(w, "ok\n")
+	m.Count = next
+	if err := s.saveManifest(name, m); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Fprintf(w, "ok — diff #%d stored\n", next)
 }
 
-// validName rejects names with path separators or dots to prevent directory traversal.
+func (s *Server) diffPath(name string, n int) string {
+	return filepath.Join(s.dataDir, name, fmt.Sprintf("%04d.syncdiff", n))
+}
+
+func (s *Server) manifestPath(name string) string {
+	return filepath.Join(s.dataDir, name, "manifest.json")
+}
+
+func (s *Server) loadManifest(name string) (manifest, error) {
+	data, err := os.ReadFile(s.manifestPath(name))
+	if os.IsNotExist(err) {
+		return manifest{}, nil
+	}
+	if err != nil {
+		return manifest{}, err
+	}
+	var m manifest
+	return m, json.Unmarshal(data, &m)
+}
+
+func (s *Server) saveManifest(name string, m manifest) error {
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.manifestPath(name), data, 0644)
+}
+
 func validName(name string) bool {
 	return name != "" &&
 		!strings.Contains(name, "/") &&

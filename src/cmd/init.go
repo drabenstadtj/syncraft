@@ -69,8 +69,13 @@ var initCmd = &cobra.Command{
 			return fmt.Errorf("snapshot: %w", err)
 		}
 
+		fmt.Print("Server URL (leave blank to set later): ")
+		var server string
+		fmt.Scan(&server)
+		server = strings.TrimSpace(server)
+
 		// write .syncraft/config.json inside the world folder
-		wc := &config.WorldConfig{Name: name}
+		wc := &config.WorldConfig{Name: name, Server: server}
 		if err := wc.Save(worldDir); err != nil {
 			return fmt.Errorf("write world config: %w", err)
 		}
