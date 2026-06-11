@@ -2,37 +2,68 @@ package cmd
 
 import (
 	"fmt"
-	"os"
+	"net/http"
+	"strings"
 
+	"github.com/drabenstadtj/syncraft/src/internal/config"
 	"github.com/drabenstadtj/syncraft/src/internal/diff"
 	"github.com/spf13/cobra"
 )
 
 var pullCmd = &cobra.Command{
-	Use:   "pull <world-region-dir> <input.syncdiff>",
-	Short: "Apply a world diff to a region directory",
-	Args:  cobra.ExactArgs(2),
+	Use:   "pull <name>",
+	Short: "Pull and apply the latest world diff from the server",
+	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		worldDir, diffPath := args[0], args[1]
+		name := args[0]
 
-		f, err := os.Open(diffPath)
+		worldDir, snapshotDir, err := resolveWorld(name)
 		if err != nil {
-			return fmt.Errorf("open diff: %w", err)
+			return err
 		}
-		defer f.Close()
 
-		diffs, err := diff.Decode(f)
+		wc, err := config.LoadWorldConfig(worldDir)
+		if err != nil {
+			return fmt.Errorf("load world config: %w", err)
+		}
+		if wc.Server == "" {
+			return fmt.Errorf("no server configured — run: syncraft remote %s <url>", name)
+		}
+
+		url := strings.TrimRight(wc.Server, "/") + "/worlds/" + name
+		resp, err := http.Get(url)
+		if err != nil {
+			return fmt.Errorf("fetch from server: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode == http.StatusNotFound {
+			fmt.Println("no diff available on server")
+			return nil
+		}
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("server returned %d", resp.StatusCode)
+		}
+
+		wd, err := diff.Decode(resp.Body)
 		if err != nil {
 			return fmt.Errorf("decode: %w", err)
 		}
 
-		for _, d := range diffs {
-			target := worldDir + "/" + d.Filename
-			if err := diff.Patch(target, d); err != nil {
-				return fmt.Errorf("patch %s: %w", d.Filename, err)
-			}
-			fmt.Printf("patched %s (%d chunk(s))\n", d.Filename, len(d.Chunks))
+		if err := diff.Patch(worldDir, wd); err != nil {
+			return fmt.Errorf("patch: %w", err)
 		}
+
+		if _, err := snapshotWorld(worldDir, snapshotDir); err != nil {
+			return fmt.Errorf("update snapshot: %w", err)
+		}
+
+		totalChunks := 0
+		for _, d := range wd.Regions {
+			totalChunks += len(d.Chunks)
+		}
+		fmt.Printf("applied %d region(s), %d chunk(s), %d file(s)\n",
+			len(wd.Regions), totalChunks, len(wd.Files))
 		return nil
 	},
 }

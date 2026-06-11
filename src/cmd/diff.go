@@ -9,18 +9,23 @@ import (
 )
 
 var diffCmd = &cobra.Command{
-	Use:   "diff <world-before> <world-after> <output.syncdiff>",
-	Short: "Generate a diff between two world region directories",
-	Args:  cobra.ExactArgs(3),
+	Use:   "diff <name> <output.syncdiff>",
+	Short: "Generate a diff between the current world and the last snapshot",
+	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		dirA, dirB, outPath := args[0], args[1], args[2]
+		name, outPath := args[0], args[1]
 
-		diffs, err := diff.DiffWorld(dirA, dirB)
+		worldDir, snapshotDir, err := resolveWorld(name)
+		if err != nil {
+			return err
+		}
+
+		wd, err := diff.DiffWorld(snapshotDir, worldDir)
 		if err != nil {
 			return fmt.Errorf("diff: %w", err)
 		}
 
-		if len(diffs) == 0 {
+		if len(wd.Regions) == 0 && len(wd.Files) == 0 {
 			fmt.Println("no changes")
 			return nil
 		}
@@ -31,15 +36,16 @@ var diffCmd = &cobra.Command{
 		}
 		defer f.Close()
 
-		if err := diff.Encode(f, diffs); err != nil {
+		if err := diff.Encode(f, wd); err != nil {
 			return fmt.Errorf("encode: %w", err)
 		}
 
-		total := 0
-		for _, d := range diffs {
-			total += len(d.Chunks)
+		totalChunks := 0
+		for _, d := range wd.Regions {
+			totalChunks += len(d.Chunks)
 		}
-		fmt.Printf("wrote %d changed chunk(s) across %d region(s) to %s\n", total, len(diffs), outPath)
+		fmt.Printf("%d region(s), %d chunk(s), %d file(s) changed — wrote %s\n",
+			len(wd.Regions), totalChunks, len(wd.Files), outPath)
 		return nil
 	},
 }

@@ -21,6 +21,84 @@ type RegionDiff struct {
 	Chunks   []ChunkDiff
 }
 
+// FileDiff holds the full contents of a changed non-region file.
+type FileDiff struct {
+	Path string // relative to world root (e.g. "level.dat", "playerdata/abc.dat")
+	Data []byte
+}
+
+// WorldDiff is the top-level diff produced by comparing two world states.
+type WorldDiff struct {
+	Regions []*RegionDiff
+	Files   []FileDiff
+}
+
+// mcaPatterns lists subdirs that contain region files to diff.
+var mcaPatterns = []string{"region", "entities", "poi"}
+
+// filePatterns lists glob patterns (relative to world root) for whole-file diffs.
+var filePatterns = []string{
+	"level.dat",
+	"playerdata/*.dat",
+}
+
+// DiffWorld compares two world directories and returns a WorldDiff.
+func DiffWorld(dirA, dirB string) (*WorldDiff, error) {
+	wd := &WorldDiff{}
+
+	for _, sub := range mcaPatterns {
+		matches, err := filepath.Glob(filepath.Join(dirB, sub, "r.*.*.mca"))
+		if err != nil {
+			return nil, err
+		}
+		for _, pathB := range matches {
+			rel, _ := filepath.Rel(dirB, pathB)
+			pathA := filepath.Join(dirA, rel)
+
+			var d *RegionDiff
+			if _, err := os.Stat(pathA); os.IsNotExist(err) {
+				d, err = diffAgainstEmpty(pathB, rel)
+				if err != nil {
+					return nil, fmt.Errorf("diff %s: %w", rel, err)
+				}
+			} else {
+				d, err = DiffRegion(pathA, pathB)
+				if err != nil {
+					return nil, fmt.Errorf("diff %s: %w", rel, err)
+				}
+			}
+			if len(d.Chunks) > 0 {
+				wd.Regions = append(wd.Regions, d)
+			}
+		}
+	}
+
+	for _, pattern := range filePatterns {
+		matches, err := filepath.Glob(filepath.Join(dirB, pattern))
+		if err != nil {
+			return nil, err
+		}
+		for _, pathB := range matches {
+			rel, _ := filepath.Rel(dirB, pathB)
+			pathA := filepath.Join(dirA, rel)
+
+			dataB, err := os.ReadFile(pathB)
+			if err != nil {
+				return nil, fmt.Errorf("read %s: %w", rel, err)
+			}
+
+			dataA, err := os.ReadFile(pathA)
+			if os.IsNotExist(err) || !bytes.Equal(dataA, dataB) {
+				wd.Files = append(wd.Files, FileDiff{Path: rel, Data: dataB})
+			} else if err != nil {
+				return nil, fmt.Errorf("read snapshot %s: %w", rel, err)
+			}
+		}
+	}
+
+	return wd, nil
+}
+
 // DiffRegion compares two .mca files and returns the chunks that differ.
 func DiffRegion(pathA, pathB string) (*RegionDiff, error) {
 	rA, fA, err := anvil.Open(pathA)
@@ -35,7 +113,8 @@ func DiffRegion(pathA, pathB string) (*RegionDiff, error) {
 	}
 	defer fB.Close()
 
-	diff := &RegionDiff{Filename: pathB}
+	rel, _ := filepath.Rel(filepath.Dir(pathB), pathB)
+	d := &RegionDiff{Filename: rel}
 
 	for z := 0; z < 32; z++ {
 		for x := 0; x < 32; x++ {
@@ -49,56 +128,23 @@ func DiffRegion(pathA, pathB string) (*RegionDiff, error) {
 			}
 
 			if !bytes.Equal(a, b) && b != nil {
-				diff.Chunks = append(diff.Chunks, ChunkDiff{X: x, Z: z, Data: b})
+				d.Chunks = append(d.Chunks, ChunkDiff{X: x, Z: z, Data: b})
 			}
 		}
 	}
 
-	return diff, nil
-}
-
-// DiffWorld compares two world region directories and returns one RegionDiff per changed file.
-func DiffWorld(dirA, dirB string) ([]*RegionDiff, error) {
-	matches, err := filepath.Glob(filepath.Join(dirB, "r.*.*.mca"))
-	if err != nil {
-		return nil, err
-	}
-
-	var diffs []*RegionDiff
-	for _, pathB := range matches {
-		pathA := filepath.Join(dirA, filepath.Base(pathB))
-
-		// if the file doesn't exist in A, treat every chunk in B as new
-		if _, err := os.Stat(pathA); os.IsNotExist(err) {
-			pathA = ""
-		}
-
-		var d *RegionDiff
-		if pathA == "" {
-			d, err = diffAgainstEmpty(pathB)
-		} else {
-			d, err = DiffRegion(pathA, pathB)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("diff %s: %w", filepath.Base(pathB), err)
-		}
-		if len(d.Chunks) > 0 {
-			diffs = append(diffs, d)
-		}
-	}
-
-	return diffs, nil
+	return d, nil
 }
 
 // diffAgainstEmpty returns all present chunks in a region file as a diff.
-func diffAgainstEmpty(path string) (*RegionDiff, error) {
+func diffAgainstEmpty(path, rel string) (*RegionDiff, error) {
 	r, f, err := anvil.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 
-	d := &RegionDiff{Filename: filepath.Base(path)}
+	d := &RegionDiff{Filename: rel}
 	for z := 0; z < 32; z++ {
 		for x := 0; x < 32; x++ {
 			data, err := r.ReadRawChunk(f, x, z)
@@ -120,7 +166,6 @@ func OpenForWrite(path string) (*anvil.RegionFile, *os.File, error) {
 		return nil, nil, err
 	}
 
-	// ensure file has at least an 8KB header
 	info, _ := f.Stat()
 	if info.Size() < 8192 {
 		f.Write(make([]byte, 8192))
