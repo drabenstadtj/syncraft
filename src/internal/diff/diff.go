@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/drabenstadtj/syncraft/src/internal/anvil"
 )
@@ -54,6 +55,62 @@ func DiffRegion(pathA, pathB string) (*RegionDiff, error) {
 	}
 
 	return diff, nil
+}
+
+// DiffWorld compares two world region directories and returns one RegionDiff per changed file.
+func DiffWorld(dirA, dirB string) ([]*RegionDiff, error) {
+	matches, err := filepath.Glob(filepath.Join(dirB, "r.*.*.mca"))
+	if err != nil {
+		return nil, err
+	}
+
+	var diffs []*RegionDiff
+	for _, pathB := range matches {
+		pathA := filepath.Join(dirA, filepath.Base(pathB))
+
+		// if the file doesn't exist in A, treat every chunk in B as new
+		if _, err := os.Stat(pathA); os.IsNotExist(err) {
+			pathA = ""
+		}
+
+		var d *RegionDiff
+		if pathA == "" {
+			d, err = diffAgainstEmpty(pathB)
+		} else {
+			d, err = DiffRegion(pathA, pathB)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("diff %s: %w", filepath.Base(pathB), err)
+		}
+		if len(d.Chunks) > 0 {
+			diffs = append(diffs, d)
+		}
+	}
+
+	return diffs, nil
+}
+
+// diffAgainstEmpty returns all present chunks in a region file as a diff.
+func diffAgainstEmpty(path string) (*RegionDiff, error) {
+	r, f, err := anvil.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	d := &RegionDiff{Filename: filepath.Base(path)}
+	for z := 0; z < 32; z++ {
+		for x := 0; x < 32; x++ {
+			data, err := r.ReadRawChunk(f, x, z)
+			if err != nil {
+				return nil, err
+			}
+			if data != nil {
+				d.Chunks = append(d.Chunks, ChunkDiff{X: x, Z: z, Data: data})
+			}
+		}
+	}
+	return d, nil
 }
 
 // OpenForWrite opens an .mca file for reading and writing, creating it if needed.
