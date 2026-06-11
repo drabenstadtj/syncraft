@@ -33,8 +33,14 @@ type WorldDiff struct {
 	Files   []FileDiff
 }
 
-// mcaPatterns lists subdirs that contain region files to diff.
-var mcaPatterns = []string{"region", "entities", "poi"}
+// mcaPatterns lists subdirs (relative to world root) that contain region files to diff.
+var mcaPatterns = []string{
+	"dimensions/minecraft/overworld/region",
+	"dimensions/minecraft/overworld/entities",
+	"dimensions/minecraft/overworld/poi",
+	"dimensions/minecraft/the_nether/region",
+	"dimensions/minecraft/the_end/region",
+}
 
 // filePatterns lists glob patterns (relative to world root) for whole-file diffs.
 var filePatterns = []string{
@@ -66,6 +72,7 @@ func DiffWorld(dirA, dirB string) (*WorldDiff, error) {
 				if err != nil {
 					return nil, fmt.Errorf("diff %s: %w", rel, err)
 				}
+				d.Filename = rel
 			}
 			if len(d.Chunks) > 0 {
 				wd.Regions = append(wd.Regions, d)

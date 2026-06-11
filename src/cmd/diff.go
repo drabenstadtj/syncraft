@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/drabenstadtj/syncraft/src/internal/config"
 	"github.com/drabenstadtj/syncraft/src/internal/diff"
 	"github.com/spf13/cobra"
 )
@@ -15,7 +16,11 @@ var diffCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, outPath := args[0], args[1]
 
-		worldDir, snapshotDir, err := resolveWorld(name)
+		worldDir, err := findWorldDir(name)
+		if err != nil {
+			return err
+		}
+		snapshotDir := config.SnapshotDir(worldDir)
 		if err != nil {
 			return err
 		}

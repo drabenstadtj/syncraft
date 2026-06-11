@@ -8,28 +8,26 @@ import (
 )
 
 var remoteCmd = &cobra.Command{
-	Use:   "remote <name> <url>",
-	Short: "Set the server URL for a registered world",
+	Use:   "remote <world> <url>",
+	Short: "Set the server URL for a world",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		name, url := args[0], args[1]
-
-		worldDir, _, err := resolveWorld(name)
+		worldDir, err := findWorldDir(args[0])
 		if err != nil {
 			return err
 		}
 
 		wc, err := config.LoadWorldConfig(worldDir)
 		if err != nil {
-			return fmt.Errorf("load world config: %w", err)
+			return fmt.Errorf("world not initialized — run: syncraft init %s", args[0])
 		}
 
-		wc.Server = url
+		wc.Server = args[1]
 		if err := wc.Save(worldDir); err != nil {
-			return fmt.Errorf("save world config: %w", err)
+			return fmt.Errorf("save config: %w", err)
 		}
 
-		fmt.Printf("server for %q set to %s\n", name, url)
+		fmt.Printf("remote set to %s\n", args[1])
 		return nil
 	},
 }

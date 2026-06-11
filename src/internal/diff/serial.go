@@ -94,12 +94,14 @@ func Decode(r io.Reader) (*WorldDiff, error) {
 
 		chunks := make([]ChunkDiff, chunkCount)
 		for j := range chunks {
-			if err := binary.Read(r, binary.BigEndian, &chunks[j].X); err != nil {
+			var x, z int32
+			if err := binary.Read(r, binary.BigEndian, &x); err != nil {
 				return nil, fmt.Errorf("read chunk X: %w", err)
 			}
-			if err := binary.Read(r, binary.BigEndian, &chunks[j].Z); err != nil {
+			if err := binary.Read(r, binary.BigEndian, &z); err != nil {
 				return nil, fmt.Errorf("read chunk Z: %w", err)
 			}
+			chunks[j].X, chunks[j].Z = int(x), int(z)
 			chunks[j].Data, err = readBytes(r)
 			if err != nil {
 				return nil, fmt.Errorf("read chunk data: %w", err)

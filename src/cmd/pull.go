@@ -1,9 +1,10 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net/http"
-	"strings"
 
 	"github.com/drabenstadtj/syncraft/src/internal/config"
 	"github.com/drabenstadtj/syncraft/src/internal/diff"
@@ -11,27 +12,24 @@ import (
 )
 
 var pullCmd = &cobra.Command{
-	Use:   "pull <name>",
+	Use:   "pull <world>",
 	Short: "Pull and apply the latest world diff from the server",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		name := args[0]
-
-		worldDir, snapshotDir, err := resolveWorld(name)
+		worldDir, err := findWorldDir(args[0])
 		if err != nil {
 			return err
 		}
 
 		wc, err := config.LoadWorldConfig(worldDir)
 		if err != nil {
-			return fmt.Errorf("load world config: %w", err)
+			return fmt.Errorf("world not initialized — run: syncraft init %s", args[0])
 		}
 		if wc.Server == "" {
-			return fmt.Errorf("no server configured — run: syncraft remote %s <url>", name)
+			return fmt.Errorf("no server configured — run: syncraft remote %s <url>", args[0])
 		}
 
-		url := strings.TrimRight(wc.Server, "/") + "/worlds/" + name
-		resp, err := http.Get(url)
+		resp, err := http.Get(wc.Server)
 		if err != nil {
 			return fmt.Errorf("fetch from server: %w", err)
 		}
@@ -45,7 +43,13 @@ var pullCmd = &cobra.Command{
 			return fmt.Errorf("server returned %d", resp.StatusCode)
 		}
 
-		wd, err := diff.Decode(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("read response: %w", err)
+		}
+		diffSize := len(body)
+
+		wd, err := diff.Decode(bytes.NewReader(body))
 		if err != nil {
 			return fmt.Errorf("decode: %w", err)
 		}
@@ -54,6 +58,7 @@ var pullCmd = &cobra.Command{
 			return fmt.Errorf("patch: %w", err)
 		}
 
+		snapshotDir := config.SnapshotDir(worldDir)
 		if _, err := snapshotWorld(worldDir, snapshotDir); err != nil {
 			return fmt.Errorf("update snapshot: %w", err)
 		}
@@ -62,8 +67,8 @@ var pullCmd = &cobra.Command{
 		for _, d := range wd.Regions {
 			totalChunks += len(d.Chunks)
 		}
-		fmt.Printf("applied %d region(s), %d chunk(s), %d file(s)\n",
-			len(wd.Regions), totalChunks, len(wd.Files))
+		fmt.Printf("applied %d region(s), %d chunk(s), %d file(s) (%s)\n",
+			len(wd.Regions), totalChunks, len(wd.Files), formatSize(diffSize))
 		return nil
 	},
 }

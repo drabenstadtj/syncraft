@@ -17,10 +17,20 @@ type RegionFile struct {
 }
 
 // Open reads the header of an .mca file into a RegionFile.
+// Files smaller than 8KB are treated as empty regions.
 func Open(path string) (*RegionFile, *os.File, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, nil, err
+	}
+	if info.Size() < 8192 {
+		return &RegionFile{}, f, nil
 	}
 
 	var r RegionFile
